@@ -16,4 +16,4 @@ Steps
     -b lhe_files/ZGTo2LG_2Jets_TuneCP5_13p6TeV_amcatnloFXFX-pythia8.lhe 
     --tag_a run2 --tag_b run3 --o run2_run3_ZGToLLG`
 
-5. `open run2_run3_ZGToLLG.pd`
+5. `open run2_run3_ZGToLLG.pdf`
