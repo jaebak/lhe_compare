@@ -43,6 +43,8 @@ namespace{
   string lhe_a_tag = "a";
   string lhe_b_tag = "b";
   string output = "";
+  long nEvents = -1;
+  //long nEvents = 100;
 }
 void GetOptions(int argc, char *argv[]){
   while(true){
@@ -52,12 +54,13 @@ void GetOptions(int argc, char *argv[]){
       {"tag_a", required_argument, 0, 0},
       {"tag_b", required_argument, 0, 0},
       {"output", required_argument, 0, 'o'},
+      {"nevents", optional_argument, 0, 'n'},
       {0, 0, 0, 0}
     };
 
     char opt = -1;
     int option_index;
-    opt = getopt_long(argc, argv, "a:b:o:", long_options, &option_index);
+    opt = getopt_long(argc, argv, "a:b:o:n:", long_options, &option_index);
 
     if( opt == -1) break;
 
@@ -71,6 +74,9 @@ void GetOptions(int argc, char *argv[]){
       break;
     case 'o':
       output = optarg;
+      break;
+    case 'n':
+      nEvents = atoi(optarg);
       break;
     case 0:
       optname = long_options[option_index].name;
@@ -247,13 +253,13 @@ void fill_hist_definitions(ParticleInfo const & particle_info, unsigned iParticl
   }
 }
 
-void fill_tree(LHEF::Reader & reader, TTree * tree, ParticleInfo & particle_info, map<string, tuple<string, long, double, double> > & hist_definitions, long nEvents = -1, bool verbose = false) {
+void fill_tree(LHEF::Reader & reader, TTree * tree, ParticleInfo & particle_info, map<string, tuple<string, long, double, double> > & hist_definitions, bool verbose = false) {
   long iEvent = 0;
 
   particle_info.set_vlong_branches({"pid"}, tree);
   particle_info.set_vint_branches({"status_code", "mother_idx_first", "mother_idx_second", "colors_first", "colors_second"}, tree);
   particle_info.set_vdouble_branches({"px", "py", "pz", "pt", "mass", "rec_mass", "energy", "eta", "phi", "lifetime", "cos_spin_decay"}, tree);
-  particle_info.set_double_branches({"weight"}, tree);
+  particle_info.set_double_branches({"weight", "has_z"}, tree);
 
   while (reader.readEvent()) {
 
@@ -306,6 +312,142 @@ void fill_tree(LHEF::Reader & reader, TTree * tree, ParticleInfo & particle_info
       fill_hist_definitions(particle_info, iParticle, hist_definitions);
     }
 
+    // Basic reconstruction
+
+    // Reconstruct OSSF (Opposite sign same flavor) leptons
+    // Find OSSF pair
+    vector<long> lepton_pids = {11, 13};
+    //cout<<"nParticles: "<<nParticles<<endl;
+    vector<pair<unsigned, unsigned> > ossf_indices;
+    for (unsigned iParticle = 0; iParticle < nParticles; ++iParticle) {
+      // Find lepton
+      long iParticle_pid = particle_info.m_vlong["pid"][iParticle];
+      if (std::find(lepton_pids.begin(), lepton_pids.end(), abs(iParticle_pid)) == lepton_pids.end()) continue;
+      for (unsigned jParticle = iParticle+1; jParticle < nParticles; ++jParticle) {
+        // Find same sign, opposite flavor lepton
+        long jParticle_pid = particle_info.m_vlong["pid"][jParticle];
+        if (iParticle_pid != -jParticle_pid) continue;
+        ossf_indices.push_back({iParticle, jParticle});
+
+        // Reconstruct OSSF pair
+        TLorentzVector lepton_a, lepton_b;
+        lepton_a.SetPxPyPzE(particle_info.m_vdouble["px"][iParticle], particle_info.m_vdouble["py"][iParticle], particle_info.m_vdouble["pz"][iParticle], particle_info.m_vdouble["energy"][iParticle]);
+        lepton_b.SetPxPyPzE(particle_info.m_vdouble["px"][jParticle], particle_info.m_vdouble["py"][jParticle], particle_info.m_vdouble["pz"][jParticle], particle_info.m_vdouble["energy"][jParticle]);
+        TLorentzVector ossf_particle = lepton_a + lepton_b;
+        // Save information
+        particle_info.m_vlong["pid"].push_back(1000023);
+        particle_info.m_vint["status_code"].push_back(0);
+        particle_info.m_vdouble["px"].push_back(ossf_particle.Px());
+        particle_info.m_vdouble["py"].push_back(ossf_particle.Py());
+        particle_info.m_vdouble["pz"].push_back(ossf_particle.Pz());
+        particle_info.m_vdouble["energy"].push_back(ossf_particle.E());
+        particle_info.m_vdouble["mass"].push_back(ossf_particle.M());
+        particle_info.m_vdouble["lifetime"].push_back(0);
+        particle_info.m_vdouble["cos_spin_decay"].push_back(0);
+        particle_info.m_vint["mother_idx_first"].push_back(0);
+        particle_info.m_vint["mother_idx_second"].push_back(0);
+        particle_info.m_vint["colors_first"].push_back(0);
+        particle_info.m_vint["colors_second"].push_back(0);
+        // Set hist definition
+        vector<pair<string, string> > ossf_hists {{"ossf_px", "px"}, {"ossf_py", "py"}, {"ossf_pz", "pz"}, {"ossf_energy", "energy"}, {"ossf_mass", "mass"}};
+        if (hist_definitions.find(ossf_hists[0].first) == hist_definitions.end()) {
+          // Create histogram definitions
+          for (auto ossf_hist : ossf_hists) {
+            string & hist_name = ossf_hist.first;
+            string & var_name = ossf_hist.second;
+            double var_value = particle_info.m_vdouble[var_name].back();
+            //hist_definitions[hist_name] = {var_name, 1000023, var_value, var_value};
+            hist_definitions[hist_name] = {var_name, 1000023, 50, 130};
+          }
+        } 
+        //else {
+        //  // Set min and max
+        //  for (auto ossf_hist : ossf_hists) {
+        //    string & hist_name = ossf_hist.first;
+        //    string & var_name = ossf_hist.second;
+        //    double var_value = particle_info.m_vdouble[var_name].back();
+        //    if (var_value < get<2>(hist_definitions[hist_name])) get<2>(hist_definitions[hist_name]) = var_value;
+        //    if (var_value > get<3>(hist_definitions[hist_name])) get<3>(hist_definitions[hist_name]) = var_value;
+        //  }
+        //}
+
+      }
+    }
+    //// Select best OSSF
+    //double target_mass = 91.188;
+    //pair<unsigned, unsigned> best_pair;
+    //long best_mass = 0;
+    //for (auto pair_indices : ossf_indices) {
+    //  unsigned iParticle = pair_indices.first;
+    //  unsigned jParticle = pair_indices.second;
+    //  TLorentzVector lepton_a, lepton_b;
+    //  lepton_a.SetPxPyPzE(particle_info.m_vdouble["px"][iParticle], particle_info.m_vdouble["py"][iParticle], particle_info.m_vdouble["pz"][iParticle], particle_info.m_vdouble["energy"][iParticle]);
+    //  lepton_b.SetPxPyPzE(particle_info.m_vdouble["px"][jParticle], particle_info.m_vdouble["py"][jParticle], particle_info.m_vdouble["pz"][jParticle], particle_info.m_vdouble["energy"][jParticle]);
+    //  TLorentzVector ossf_particle = lepton_a + lepton_b;
+    //  if (fabs(ossf_particle.M()-target_mass) < fabs(best_mass-target_mass)) {
+    //    if (best_mass != 0) cout<<"prev_best: "<<best_mass<<" curr_mass: "<<ossf_particle.M()<<endl;
+    //    best_mass = ossf_particle.M();
+    //    best_pair = {iParticle, jParticle};
+    //  }
+    //}
+    //// Save best OSSF
+    //if (best_mass != 0) {
+    //  unsigned iParticle = best_pair.first;
+    //  unsigned jParticle = best_pair.second;
+    //  // Reconstruct OSSF pair
+    //  TLorentzVector lepton_a, lepton_b;
+    //  lepton_a.SetPxPyPzE(particle_info.m_vdouble["px"][iParticle], particle_info.m_vdouble["py"][iParticle], particle_info.m_vdouble["pz"][iParticle], particle_info.m_vdouble["energy"][iParticle]);
+    //  lepton_b.SetPxPyPzE(particle_info.m_vdouble["px"][jParticle], particle_info.m_vdouble["py"][jParticle], particle_info.m_vdouble["pz"][jParticle], particle_info.m_vdouble["energy"][jParticle]);
+    //  TLorentzVector ossf_particle = lepton_a + lepton_b;
+    //  // Save information
+    //  particle_info.m_vlong["pid"].push_back(1000023);
+    //  particle_info.m_vint["status_code"].push_back(0);
+    //  particle_info.m_vdouble["px"].push_back(ossf_particle.Px());
+    //  particle_info.m_vdouble["py"].push_back(ossf_particle.Py());
+    //  particle_info.m_vdouble["pz"].push_back(ossf_particle.Pz());
+    //  particle_info.m_vdouble["energy"].push_back(ossf_particle.E());
+    //  particle_info.m_vdouble["mass"].push_back(ossf_particle.M());
+    //  particle_info.m_vdouble["lifetime"].push_back(0);
+    //  particle_info.m_vdouble["cos_spin_decay"].push_back(0);
+    //  particle_info.m_vint["mother_idx_first"].push_back(0);
+    //  particle_info.m_vint["mother_idx_second"].push_back(0);
+    //  particle_info.m_vint["colors_first"].push_back(0);
+    //  particle_info.m_vint["colors_second"].push_back(0);
+    //  // Set hist definition
+    //  vector<pair<string, string> > ossf_hists {{"ossf_px", "px"}, {"ossf_py", "py"}, {"ossf_pz", "pz"}, {"ossf_energy", "energy"}, {"ossf_mass", "mass"}};
+    //  if (hist_definitions.find(ossf_hists[0].first) == hist_definitions.end()) {
+    //    // Create histogram definitions
+    //    for (auto ossf_hist : ossf_hists) {
+    //      string & hist_name = ossf_hist.first;
+    //      string & var_name = ossf_hist.second;
+    //      double var_value = particle_info.m_vdouble[var_name].back();
+    //      hist_definitions[hist_name] = {var_name, 1000023, var_value, var_value};
+    //    }
+    //  } else {
+    //    // Set min and max
+    //    for (auto ossf_hist : ossf_hists) {
+    //      string & hist_name = ossf_hist.first;
+    //      string & var_name = ossf_hist.second;
+    //      double var_value = particle_info.m_vdouble[var_name].back();
+    //      if (var_value < get<2>(hist_definitions[hist_name])) get<2>(hist_definitions[hist_name]) = var_value;
+    //      if (var_value > get<3>(hist_definitions[hist_name])) get<3>(hist_definitions[hist_name]) = var_value;
+    //    }
+    //  }
+    //}
+
+    // Make weight hist definition
+    double weight = particle_info.m_double["weight"];
+    if (hist_definitions.find("weight") == hist_definitions.end()) {
+      hist_definitions["weight"] = {"weight", 0, weight, weight};
+    } else {
+      if (weight < get<2>(hist_definitions["weight"])) get<2>(hist_definitions["weight"]) = weight;
+      if (weight > get<3>(hist_definitions["weight"])) get<3>(hist_definitions["weight"]) = weight;
+    }
+    //if (particle_info.m_double["weight"]<0) {
+    //  cout<<particle_info.m_double["weight"]<<endl;
+    //  cout<<"min: "<<get<2>(hist_definitions["weight"])<<" max: "<<get<3>(hist_definitions["weight"])<<endl;
+    //}
+
     tree->Fill();
     iEvent++;
     if (nEvents != -1 && iEvent == nEvents) break;
@@ -316,7 +458,7 @@ void fill_tree(LHEF::Reader & reader, TTree * tree, ParticleInfo & particle_info
 void fill_histograms(TTree * tree, map<string, tuple<string, long, double, double> > const & hist_definitions, map<string,TH1F*> & histograms, int nbins, string const & tag) {
   // Make histograms
   new_canvas();
-  vector<string> ignore_variables = {"rec_mass", "colors_first", "colors_second", "mother_idx_first", "mother_idx_second", "rec_mass", "pt", "eta", "phi", "lifetime", "cos_spin_decay"};
+  vector<string> ignore_variables = {"rec_mass", "colors_first", "colors_second", "mother_idx_first", "mother_idx_second", "rec_mass", "pt", "eta", "phi", "lifetime", "cos_spin_decay", "weight"};
   for (auto hist_definition : hist_definitions) {
     if (find(ignore_variables.begin(), ignore_variables.end(), get<0>(hist_definition.second)) != ignore_variables.end()) continue;
     histograms[hist_definition.first] = new TH1F((hist_definition.first+"_"+tag).c_str(), hist_definition.first.c_str(), nbins, get<2>(hist_definition.second), get<3>(hist_definition.second));
@@ -325,12 +467,17 @@ void fill_histograms(TTree * tree, map<string, tuple<string, long, double, doubl
     tree->Draw((get<0>(hist_definition.second)+">>"+hist_definition.first+"_"+tag).c_str(), ("(pid=="+to_string(get<1>(hist_definition.second))+")*weight/abs(weight)").c_str());
     //cout<<hist_definition.first<<" "<<"pid=="+to_string(get<1>(hist_definition.second))<<endl;
   }
+  //cout<<"min: "<<get<2>(hist_definitions.at("weight"))<<" max: "<<get<3>(hist_definitions.at("weight"))<<endl;
+  //cout<<"tree min: "<<tree->GetMinimum("weight")<<" tree max: "<<tree->GetMaximum("weight")<<endl;
+  histograms["weight"] = new TH1F(("weight_"+tag).c_str(), "weight", nbins, get<2>(hist_definitions.at("weight"))-1e-8, get<3>(hist_definitions.at("weight"))+1e-8);
+  tree->Draw((get<0>(hist_definitions.at("weight"))+">>"+"weight_"+tag).c_str());
 }
 
 long get_pid(string const & name) {
   std::smatch pid_match;
-  std::regex_search(name, pid_match, std::regex("pid_(-?[0-9]+)"));
-  return stoi(pid_match[1]);
+  bool found = std::regex_search(name, pid_match, std::regex("pid_(-?[0-9]+)"));
+  if (found) return stoi(pid_match[1]);
+  else return -999;
 }
 
 string get_var(string const & name) {
@@ -380,8 +527,6 @@ int main(int argc, char *argv[]){
   //TFile * file = TFile::Open("compare_lhe.root","RECREATE");
   TFile * file = TFile::Open((output+".root").c_str(),"RECREATE");
 
-  long nEvents = -1;
-  //long nEvents = 100;
 
   // Fill particle tree and hist definitions
   // hist_definitions[hist_name] = [var, pid, min, max]
@@ -389,14 +534,14 @@ int main(int argc, char *argv[]){
   TTree * tree_a;
   tree_a = new TTree("tree_a", "tree_a");
   ParticleInfo particle_info_a;
-  fill_tree(*reader_a, tree_a, particle_info_a, hist_definitions, nEvents);
+  fill_tree(*reader_a, tree_a, particle_info_a, hist_definitions);
   tree_a->Write();
 
   TTree * tree_b = 0;
   ParticleInfo particle_info_b;
   if (path_b != "") {
     tree_b = new TTree("tree_b", "tree_b");
-    fill_tree(*reader_b, tree_b, particle_info_b, hist_definitions, nEvents);
+    fill_tree(*reader_b, tree_b, particle_info_b, hist_definitions);
     tree_b->Write();
   }
 
@@ -414,10 +559,11 @@ int main(int argc, char *argv[]){
   if (path_b != "") fill_histograms(tree_b, hist_definitions, histograms_b, nbins, /*tag*/ lhe_b_tag);
 
   //for (auto & histogram_a : histograms_a) {
-  //  TCanvas * canvas = new_canvas();
-  //  histogram_a.second->SetMinimum(0);
-  //  histogram_a.second->Draw();
-  //  canvas->SaveAs(("plots/"+histogram_a.first+".pdf").c_str());
+  //  cout<<histogram_a.first<<endl;
+  //  //TCanvas * canvas = new_canvas();
+  //  //histogram_a.second->SetMinimum(0);
+  //  //histogram_a.second->Draw();
+  //  //canvas->SaveAs(("plots/"+histogram_a.first+".pdf").c_str());
   //}
 
   vector<string> keys = get_sorted_keys(histograms_a);
@@ -428,6 +574,7 @@ int main(int argc, char *argv[]){
   paper->Print((paper_name+"[").c_str());
 
   for (string const & key : keys) {
+    cout<<key<<endl;
     TCanvas * canvas = new_canvas();
     TPad * up_pad = new TPad("up_pad", "up_pad", /*xlow*/0, /*ylow*/0.3, /*xhigh*/1., /*yhigh*/1);
     TPad * low_pad = new TPad("low_pad", "low_pad", /*xlow*/0, /*ylow*/0, /*xhigh*/1., /*yhigh*/0.3);
