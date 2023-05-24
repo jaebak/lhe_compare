@@ -1,0 +1,1 @@
+scons && ./run/compare_lhe.exe -a lhe_files/ZGToLLG_01J_5f_TuneCP5_13TeV-amcatnloFXFX-pythia8.lhe -b lhe_files/ZGTo2LG_2Jets_TuneCP5_13p6TeV_amcatnloFXFX-pythia8.lhe --tag_a run2 --tag_b run3 --o run2_run3_ZGToLLG && open run2_run3_ZGToLLG.pd

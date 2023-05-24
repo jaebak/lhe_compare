@@ -1,0 +1,7 @@
+#!/bin/bash
+# Setup ROOT
+source ~/Linux/root-6.26.10/bin/thisroot.sh
+
+# Setup for scons
+export SCONSFLAGS="-j 4" # multi-core build
+export SET_ENV_PATH=set_env.sh.mac # environment to use for build
