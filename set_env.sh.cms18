@@ -1,0 +1,10 @@
+#!/bin/bash
+# Setup ROOT
+cd /net/cms11/data/pico/cc7/CMSSW_10_2_13/src
+. /cvmfs/cms.cern.ch/cmsset_default.sh
+eval `scramv1 runtime -sh`
+cd -
+
+# Setup for scons
+export SCONSFLAGS="-j 4" # multi-core build
+export SET_ENV_PATH=set_env.sh.cms18 # environment to use for build
